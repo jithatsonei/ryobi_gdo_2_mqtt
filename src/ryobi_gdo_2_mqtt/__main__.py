@@ -8,11 +8,7 @@ def main():
     """Entry point of the application."""
     settings = Settings()
 
-    sys.exit(
-        ryobi_gdo2_mqtt(
-            settings=settings
-        )
-    )
+    sys.exit(ryobi_gdo2_mqtt(settings=settings))
 
 
 if __name__ == "__main__":
