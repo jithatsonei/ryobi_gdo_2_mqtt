@@ -7,14 +7,16 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="RYOBI_",
+        env_file=".env",
+        env_file_encoding="utf-8",
         cli_parse_args=True,
         cli_avoid_json=True,
         case_sensitive=False,
+        extra="ignore",
     )
 
     email: str = Field(description="Ryobi account email address")
     password: SecretStr = Field(description="Ryobi account password")
-    devices: list[str] = Field(default_factory=list, description="List of Ryobi device IDs to monitor")
     mqtt_host: str = Field(description="MQTT broker hostname or IP address")
     mqtt_port: int = Field(default=1883, description="MQTT broker port")
     mqtt_user: str = Field(default="", description="MQTT broker username")

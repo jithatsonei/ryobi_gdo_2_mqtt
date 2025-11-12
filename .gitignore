@@ -17,6 +17,7 @@
 result
 .env
 .env.*
+!.env.example
 
 !secrets/.env*
 

@@ -1,0 +1,10 @@
+services:
+  mqtt:
+    image: "eclipse-mosquitto:latest"
+    user: "${UID:-1000}:${GID:-1000}" 
+    ports:
+      - "1883:1883" # Standard MQTT
+      - "8084:8084" # WebSockets
+    volumes:
+      - ./mqtt/data:/mosquitto/data
+      - ./mqtt/config:/mosquitto/config
