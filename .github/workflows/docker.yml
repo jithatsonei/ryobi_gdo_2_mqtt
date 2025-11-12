@@ -15,8 +15,6 @@ jobs:
         image: eclipse-mosquitto:latest
         ports:
           - 1883:1883
-        volumes:
-          - ${{ github.workspace }}/mqtt/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
         options: >-
           --health-cmd "mosquitto_sub -t '$$SYS/#' -C 1 | grep -v Error || exit 1"
           --health-interval 10s
