@@ -1,7 +1,6 @@
 """Constants for Ryobi GDO 2 MQTT integration."""
 
-from dataclasses import dataclass
-from enum import Enum
+from enum import IntEnum, StrEnum
 
 HOST_URI = "tti.tiwiconnect.com"
 LOGIN_ENDPOINT = "api/login"
@@ -11,15 +10,14 @@ REQUEST_TIMEOUT = 3
 COORDINATOR = "coordinator"
 
 
-@dataclass(frozen=True)
-class DoorStates:
+class DoorStates(IntEnum):
     """Door state values and their string representations."""
 
-    CLOSED: int = 0
-    OPEN: int = 1
-    CLOSING: int = 2
-    OPENING: int = 3
-    FAULT: int = 4
+    CLOSED = 0
+    OPEN = 1
+    CLOSING = 2
+    OPENING = 3
+    FAULT = 4
 
     @classmethod
     def to_string(cls, value: int) -> str:
@@ -34,45 +32,41 @@ class DoorStates:
         return mapping.get(value, "unknown")
 
 
-@dataclass(frozen=True)
-class DoorCommands:
+class DoorCommands(IntEnum):
     """Door command values sent to the device."""
 
-    OPEN: int = 1
-    CLOSE: int = 0
-    STOP: int = 2
+    CLOSE = 0
+    OPEN = 1
+    STOP = 2
 
 
-@dataclass(frozen=True)
 class DoorCommandPayloads:
     """Door command payloads from Home Assistant."""
 
-    OPEN: str = "OPEN"
-    CLOSE: str = "CLOSE"
-    STOP: str = "STOP"
+    OPEN = "OPEN"
+    CLOSE = "CLOSE"
+    STOP = "STOP"
 
 
-@dataclass(frozen=True)
-class LightStates:
+class LightStates(IntEnum):
     """Light state values."""
 
-    ON: int = 1
-    OFF: int = 0
+    OFF = 0
+    ON = 1
 
 
-@dataclass(frozen=True)
 class LightCommandPayloads:
     """Light command payloads from Home Assistant."""
 
-    ON: str = "ON"
-    OFF: str = "OFF"
+    ON = "ON"
+    OFF = "OFF"
 
 
 # Battery threshold
 BATTERY_LOW_THRESHOLD = 20
 
 
-class WebSocketState(str, Enum):
+class WebSocketState(StrEnum):
     """WebSocket connection states."""
 
     CONNECTED = "connected"

@@ -2,7 +2,6 @@ import asyncio
 import logging
 import ssl
 import sys
-from typing import Any
 
 import aiohttp
 import certifi
@@ -10,15 +9,11 @@ from aiohttp import TCPConnector
 from ha_mqtt_discoverable import Settings as MQTTSettings
 
 from ryobi_gdo_2_mqtt.api import RyobiApiClient
-from ryobi_gdo_2_mqtt.constants import WebSocketState
 from ryobi_gdo_2_mqtt.device_manager import DeviceManager
 from ryobi_gdo_2_mqtt.exceptions import RyobiApiError
 from ryobi_gdo_2_mqtt.logging import log
+from ryobi_gdo_2_mqtt.service import ServiceCoordinator
 from ryobi_gdo_2_mqtt.settings import Settings
-from ryobi_gdo_2_mqtt.websocket import (
-    SIGNAL_CONNECTION_STATE,
-    RyobiWebSocket,
-)
 from ryobi_gdo_2_mqtt.websocket_parser import WebSocketMessageParser
 
 
@@ -27,12 +22,12 @@ class RyobiGDO2MQTT:
 
     def __init__(self):
         """Initialize the service."""
-        self.websockets: dict[str, RyobiWebSocket] = {}
         self.session: aiohttp.ClientSession | None = None
         self.api_client: RyobiApiClient | None = None
         self.mqtt_settings: MQTTSettings.MQTT | None = None
         self.parser: WebSocketMessageParser | None = None
         self.device_manager: DeviceManager | None = None
+        self.coordinator: ServiceCoordinator | None = None
         self._tasks: set[asyncio.Task] = set()
         self._shutdown_event = asyncio.Event()
 
@@ -59,14 +54,9 @@ class RyobiGDO2MQTT:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
-        # Clean up devices
-        if self.device_manager:
-            for device in self.device_manager.devices.values():
-                await device.cleanup()
-
-        # Close WebSockets
-        for ws in self.websockets.values():
-            await ws.close()
+        # Clean up coordinator
+        if self.coordinator:
+            await self.coordinator.cleanup()
 
         # Close session
         if self.session and not self.session.closed:
@@ -147,21 +137,23 @@ class RyobiGDO2MQTT:
             self.device_manager.mqtt_settings = self.mqtt_settings
             self.device_manager.parser = self.parser
 
+            # Create service coordinator
+            self.coordinator = ServiceCoordinator(
+                api_client=self.api_client,
+                device_manager=self.device_manager,
+            )
+
             # Create WebSocket connections and MQTT entities for each device
             for device_id, device_name in all_devices.items():
-                # Create WebSocket
-                ws = RyobiWebSocket(
-                    callback=self._create_websocket_callback(device_id),
-                    username=settings.email,
-                    apikey=self.api_client.api_key,
-                    device=device_id,
-                    session=session,
-                )
-                self.websockets[device_id] = ws
-
-                # Setup device through device manager
+                # Setup device through coordinator
                 try:
-                    await self.device_manager.setup_device(device_id, device_name, ws)
+                    ws = await self.coordinator.setup_device(
+                        device_id=device_id,
+                        device_name=device_name,
+                        username=settings.email,
+                        apikey=self.api_client.api_key,
+                        session=session,
+                    )
                 except (ValueError, RyobiApiError) as e:
                     log.error("Failed to setup device %s: %s", device_id, e)
                     continue
@@ -177,31 +169,6 @@ class RyobiGDO2MQTT:
             except asyncio.CancelledError:
                 log.info("Shutting down WebSocket connections...")
                 await self.cleanup()
-
-    def _create_websocket_callback(self, device_id: str):
-        """Create a callback function for a specific device's WebSocket.
-
-        Args:
-            device_id: The device ID this callback is for
-
-        Returns:
-            Async callback function
-        """
-
-        async def callback(signal: str, data: Any, error: Any = None) -> None:
-            """Handle WebSocket callbacks for a specific device."""
-            if signal == SIGNAL_CONNECTION_STATE:
-                if data == WebSocketState.CONNECTED:
-                    log.info("WebSocket connected for device: %s", device_id)
-                elif data == WebSocketState.STOPPED:
-                    log.warning("WebSocket stopped for device: %s. Reason: %s", device_id, error)
-                else:
-                    log.debug("WebSocket state for %s: %s", device_id, data)
-            elif signal == "data":
-                log.debug("Received data for device %s: %s", device_id, data)
-                await self.device_manager.handle_device_update(device_id, data)
-
-        return callback
 
 
 ryobi_gdo2_mqtt = RyobiGDO2MQTT()
