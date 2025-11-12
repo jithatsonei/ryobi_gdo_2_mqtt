@@ -2,21 +2,19 @@ import json
 
 from aiohttp import ClientSession, ServerConnectionError, ServerTimeoutError
 
-from ryobi_gdo_2_mqtt.constants import DEVICE_GET_ENDPOINT, HOST_URI, LOGIN_ENDPOINT
+from ryobi_gdo_2_mqtt.constants import DEVICE_GET_ENDPOINT, HOST_URI, LOGIN_ENDPOINT, DoorStates
+from ryobi_gdo_2_mqtt.exceptions import (
+    RyobiAuthenticationError,
+    RyobiConnectionError,
+    RyobiDeviceNotFoundError,
+    RyobiInvalidResponseError,
+)
 from ryobi_gdo_2_mqtt.logging import log
 from ryobi_gdo_2_mqtt.models import Auth, DeviceData, LoginResponse, LoginResult, MetaData, WskAuthAttempt
 
 
 class RyobiApiClient:
     """Client for interacting with the Ryobi API."""
-
-    DOOR_STATE = {
-        "0": "closed",
-        "1": "open",
-        "2": "closing",
-        "3": "opening",
-        "4": "fault",
-    }
 
     def __init__(self, username: str, password: str, session: ClientSession):
         """Initialize the Ryobi API client.
@@ -33,14 +31,21 @@ class RyobiApiClient:
         self._device_modules: dict[str, dict[str, str]] = {}
 
     async def get_api_key(self) -> bool:
-        """Get api_key from Ryobi."""
-        auth_ok = False
+        """Get api_key from Ryobi.
+
+        Returns:
+            True if authentication successful
+
+        Raises:
+            RyobiAuthenticationError: If authentication fails
+            RyobiInvalidResponseError: If response format is invalid
+        """
         url = f"https://{HOST_URI}/{LOGIN_ENDPOINT}"
         data = {"username": self.username, "password": self.password}
         method = "post"
         request = await self._process_request(url, method, data)
         if request is None:
-            return auth_ok
+            raise RyobiAuthenticationError("Failed to get response from login endpoint")
         try:
             # Parse response into DTO
             wsk_attempts = [WskAuthAttempt(**attempt) for attempt in request["result"]["metaData"]["wskAuthAttempts"]]
@@ -68,73 +73,88 @@ class RyobiApiClient:
             )
             login_response = LoginResponse(result=result)
             self.api_key = login_response.api_key
-            auth_ok = True
-        except KeyError:
-            log.error("Exception while parsing Ryobi answer to get API key")
-        return auth_ok
+            return True
+        except KeyError as e:
+            log.error("Exception while parsing Ryobi answer to get API key: %s", e)
+            raise RyobiInvalidResponseError(f"Invalid login response format: {e}") from e
 
     async def _process_request(self, url: str, method: str, data: dict[str, str]) -> dict | None:
-        """Process HTTP requests."""
+        """Process HTTP requests.
+
+        Raises:
+            RyobiConnectionError: If connection fails or times out
+            RyobiInvalidResponseError: If response is not valid JSON or has error status
+        """
         http_hethod = getattr(self.session, method)
         log.debug("Connecting to %s using %s", url, method)
-        reply = None
         try:
             async with http_hethod(url, data=data) as response:
                 rawReply = await response.text()
                 try:
                     reply = json.loads(rawReply)
                     if not isinstance(reply, dict):
-                        reply = None
-                except ValueError:
+                        raise RyobiInvalidResponseError(f"Response is not a dictionary: {rawReply}")
+                except ValueError as e:
                     log.warning("Reply was not in JSON format: %s", rawReply)
+                    raise RyobiInvalidResponseError(f"Invalid JSON response: {rawReply}") from e
 
                 if response.status in [404, 405, 500]:
                     log.warning("HTTP Error: %s", rawReply)
-        except (TimeoutError, ServerTimeoutError):
+                    raise RyobiInvalidResponseError(f"HTTP error {response.status}: {rawReply}")
+
+                return reply
+        except (TimeoutError, ServerTimeoutError) as e:
             log.error("Timeout connecting to %s", url)
-        except ServerConnectionError:
+            raise RyobiConnectionError(f"Timeout connecting to {url}") from e
+        except ServerConnectionError as e:
             log.error("Problem connecting to server at %s", url)
-        return reply
+            raise RyobiConnectionError(f"Connection error to {url}") from e
 
     async def check_device_id(self) -> bool:
-        """Check device_id from Ryobi."""
-        device_found = False
+        """Check device_id from Ryobi.
+
+        Raises:
+            RyobiInvalidResponseError: If response format is invalid
+        """
         url = f"https://{HOST_URI}/{DEVICE_GET_ENDPOINT}"
         data = {"username": self.username, "password": self.password}
         method = "get"
         request = await self._process_request(url, method, data)
-        if request is None:
-            return device_found
         try:
             result = request["result"]
-        except KeyError:
-            return device_found
+        except KeyError as e:
+            raise RyobiInvalidResponseError("Invalid device list response format") from e
         if len(result) == 0:
             log.error("API error: empty result")
+            return False
         else:
             for data in result:
                 if data["varName"] == self.device_id:
-                    device_found = True
-        return device_found
+                    return True
+        return False
 
     async def get_devices(self) -> dict[str, str]:
-        """Return list of devices found."""
-        devices = {}
+        """Return list of devices found.
+
+        Raises:
+            RyobiInvalidResponseError: If response format is invalid
+            RyobiDeviceNotFoundError: If no devices found
+        """
         url = f"https://{HOST_URI}/{DEVICE_GET_ENDPOINT}"
         data = {"username": self.username, "password": self.password}
         method = "get"
         request = await self._process_request(url, method, data)
-        if request is None:
-            return devices
         try:
             result = request["result"]
-        except KeyError:
-            return devices
+        except KeyError as e:
+            raise RyobiInvalidResponseError("Invalid device list response format") from e
         if len(result) == 0:
             log.error("API error: empty result")
-        else:
-            for data in result:
-                devices[data["varName"]] = data["metaData"]["name"]
+            raise RyobiDeviceNotFoundError("No devices found in account")
+
+        devices = {}
+        for data in result:
+            devices[data["varName"]] = data["metaData"]["name"]
         return devices
 
     async def update_device(self, device_id: str) -> DeviceData | None:
@@ -144,15 +164,15 @@ class RyobiApiClient:
             device_id: The device ID to update
 
         Returns:
-            DeviceData object containing device data or None on error
+            DeviceData object containing device data
+
+        Raises:
+            RyobiInvalidResponseError: If response format is invalid
         """
         url = f"https://{HOST_URI}/{DEVICE_GET_ENDPOINT}/{device_id}"
         data = {"username": self.username, "password": self.password}
         method = "get"
         request = await self._process_request(url, method, data)
-
-        if request is None:
-            return None
 
         try:
             dtm = request["result"][0]["deviceTypeMap"]
@@ -162,7 +182,7 @@ class RyobiApiClient:
             log.debug("Modules indexed for %s: %s", device_id, self._device_modules.get(device_id))
 
             if not result:
-                return None
+                raise RyobiInvalidResponseError(f"Failed to index modules for device {device_id}")
 
             device_modules = self._device_modules[device_id]
             device_data_dict = {}
@@ -170,7 +190,7 @@ class RyobiApiClient:
             # Parse initial values
             if "garageDoor" in device_modules:
                 door_state = dtm[device_modules["garageDoor"]]["at"]["doorState"]["value"]
-                device_data_dict["door_state"] = self.DOOR_STATE[str(door_state)]
+                device_data_dict["door_state"] = DoorStates.to_string(door_state)
                 device_data_dict["safety"] = dtm[device_modules["garageDoor"]]["at"]["sensorFlag"]["value"]
                 device_data_dict["vacation_mode"] = dtm[device_modules["garageDoor"]]["at"]["vacationMode"]["value"]
 
@@ -209,7 +229,7 @@ class RyobiApiClient:
 
         except KeyError as error:
             log.error("Exception while parsing device update: %s", error)
-            return None
+            raise RyobiInvalidResponseError(f"Invalid device data format for {device_id}: {error}") from error
 
     async def _index_modules(self, device_id: str, dtm: dict) -> bool:
         """Index and add modules to dictionary for a specific device.
@@ -219,7 +239,10 @@ class RyobiApiClient:
             dtm: Device type map from API response
 
         Returns:
-            True if successful, False otherwise
+            True if successful
+
+        Raises:
+            RyobiInvalidResponseError: If module parsing fails
         """
         # Known modules
         module_list = [
@@ -241,7 +264,7 @@ class RyobiApiClient:
                         frame[module] = key
         except Exception as err:
             log.error("Problem parsing module list: %s", err)
-            return False
+            raise RyobiInvalidResponseError(f"Failed to parse module list for {device_id}: {err}") from err
 
         self._device_modules[device_id] = frame
         return True

@@ -8,7 +8,7 @@ from collections import abc
 
 import aiohttp
 
-from ryobi_gdo_2_mqtt.constants import DEVICE_SET_ENDPOINT, HOST_URI
+from ryobi_gdo_2_mqtt.constants import DEVICE_SET_ENDPOINT, HOST_URI, WebSocketState
 from ryobi_gdo_2_mqtt.logging import log
 
 MAX_FAILED_ATTEMPTS = 5
@@ -21,10 +21,10 @@ ERROR_UNKNOWN = "Unknown"
 
 # Websocket Signals
 SIGNAL_CONNECTION_STATE = "websocket_state"
-STATE_CONNECTED = "connected"
-STATE_DISCONNECTED = "disconnected"
-STATE_STARTING = "starting"
-STATE_STOPPED = "stopped"
+STATE_CONNECTED = WebSocketState.CONNECTED
+STATE_DISCONNECTED = WebSocketState.DISCONNECTED
+STATE_STARTING = WebSocketState.STARTING
+STATE_STOPPED = WebSocketState.STOPPED
 
 
 class RyobiWebSocket:
@@ -46,11 +46,11 @@ class RyobiWebSocket:
         self.failed_attempts = 0
 
     @property
-    def state(self) -> str | None:
+    def state(self) -> WebSocketState | None:
         """Return the current state."""
         return self._state
 
-    async def set_state(self, value: str) -> None:
+    async def set_state(self, value: WebSocketState) -> None:
         """Set the state and notify callback."""
         self._state = value
         log.debug("Websocket state: %s", value)

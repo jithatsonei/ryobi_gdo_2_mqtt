@@ -4,6 +4,13 @@ from ha_mqtt_discoverable import DeviceInfo, Settings as MQTTSettings
 from ha_mqtt_discoverable.sensors import BinarySensor, BinarySensorInfo, Cover, CoverInfo, Switch, SwitchInfo
 from paho.mqtt.client import Client, MQTTMessage
 
+from ryobi_gdo_2_mqtt.constants import (
+    BATTERY_LOW_THRESHOLD,
+    DoorCommandPayloads,
+    DoorCommands,
+    LightCommandPayloads,
+    LightStates,
+)
 from ryobi_gdo_2_mqtt.logging import log
 
 
@@ -24,6 +31,7 @@ class RyobiDevice:
         self.device_name = device_name
         self.websocket = websocket
         self.api_client = api_client
+        self._pending_tasks: set[asyncio.Task] = set()
 
         # Create HA device info
         self.device_info = DeviceInfo(
@@ -78,17 +86,26 @@ class RyobiDevice:
             log.error("Cannot send door command: module info not available")
             return
 
-        if payload == "OPEN":
+        if payload == DoorCommandPayloads.OPEN:
             self.cover.opening()
-            # Send command via WebSocket: value=1 (open)
-            asyncio.create_task(self.websocket.send_message(port_id, module_type, "doorCommand", 1))
-        elif payload == "CLOSE":
+            task = asyncio.create_task(
+                self.websocket.send_message(port_id, module_type, "doorCommand", DoorCommands.OPEN)
+            )
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
+        elif payload == DoorCommandPayloads.CLOSE:
             self.cover.closing()
-            # Send command via WebSocket: value=0 (close)
-            asyncio.create_task(self.websocket.send_message(port_id, module_type, "doorCommand", 0))
-        elif payload == "STOP":
-            # Send stop command: value=2 (stop)
-            asyncio.create_task(self.websocket.send_message(port_id, module_type, "doorCommand", 2))
+            task = asyncio.create_task(
+                self.websocket.send_message(port_id, module_type, "doorCommand", DoorCommands.CLOSE)
+            )
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
+        elif payload == DoorCommandPayloads.STOP:
+            task = asyncio.create_task(
+                self.websocket.send_message(port_id, module_type, "doorCommand", DoorCommands.STOP)
+            )
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
             self.cover.stopped()
 
     def _handle_light_command(self, client: Client, user_data, message: MQTTMessage):
@@ -104,13 +121,15 @@ class RyobiDevice:
             log.error("Cannot send light command: module info not available")
             return
 
-        if payload == "ON":
-            # Send light on command via WebSocket: value=1
-            asyncio.create_task(self.websocket.send_message(port_id, module_type, "lightState", 1))
+        if payload == LightCommandPayloads.ON:
+            task = asyncio.create_task(self.websocket.send_message(port_id, module_type, "lightState", LightStates.ON))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
             self.light.on()
-        elif payload == "OFF":
-            # Send light off command via WebSocket: value=0
-            asyncio.create_task(self.websocket.send_message(port_id, module_type, "lightState", 0))
+        elif payload == LightCommandPayloads.OFF:
+            task = asyncio.create_task(self.websocket.send_message(port_id, module_type, "lightState", LightStates.OFF))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
             self.light.off()
 
     def update_door_state(self, state: str):
@@ -153,8 +172,98 @@ class RyobiDevice:
         """
         log.debug("Updating battery level for %s: %s", self.device_id, level)
 
-        # Consider battery low if below 20%
-        if level < 20:
+        if level < BATTERY_LOW_THRESHOLD:
             self.battery_sensor.on()  # Battery low
         else:
             self.battery_sensor.off()  # Battery OK
+
+    async def cleanup(self):
+        """Clean up device resources."""
+        log.debug("Cleaning up device: %s", self.device_id)
+        # Cancel all pending tasks
+        for task in self._pending_tasks:
+            if not task.done():
+                task.cancel()
+        if self._pending_tasks:
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+        self._pending_tasks.clear()
+
+
+class DeviceManager:
+    """Manages multiple Ryobi devices and their MQTT entities."""
+
+    def __init__(self, mqtt_settings: MQTTSettings.MQTT, api_client):
+        """Initialize the device manager.
+
+        Args:
+            mqtt_settings: MQTT connection settings
+            api_client: API client for getting module information
+        """
+        self.devices: dict[str, RyobiDevice] = {}
+        self.mqtt_settings = mqtt_settings
+        self.api_client = api_client
+        self.parser = None
+
+    async def setup_device(self, device_id: str, device_name: str, websocket) -> RyobiDevice:
+        """Set up a single device with initial state.
+
+        Args:
+            device_id: Ryobi device ID
+            device_name: Human-readable device name
+            websocket: WebSocket connection for the device
+
+        Returns:
+            Configured RyobiDevice instance
+        """
+        log.info("Setting up device: %s (%s)", device_name, device_id)
+
+        # Get initial device state and module information
+        log.info("Fetching initial state for device: %s", device_id)
+        device_data = await self.api_client.update_device(device_id)
+        if not device_data:
+            raise ValueError(f"Failed to get initial state for device: {device_id}")
+
+        # Create MQTT device entities
+        device = RyobiDevice(
+            device_id=device_id,
+            device_name=device_name,
+            mqtt_settings=self.mqtt_settings,
+            websocket=websocket,
+            api_client=self.api_client,
+        )
+        self.devices[device_id] = device
+
+        # Set initial states from device data
+        if device_data.door_state is not None:
+            device.update_door_state(device_data.door_state)
+        if device_data.light_state is not None:
+            device.update_light_state(bool(device_data.light_state))
+        if device_data.battery_level is not None:
+            device.update_battery_level(device_data.battery_level)
+
+        return device
+
+    async def handle_device_update(self, device_id: str, data: dict) -> None:
+        """Process device updates from WebSocket.
+
+        Args:
+            device_id: The device ID
+            data: The device update data
+        """
+        device = self.devices.get(device_id)
+        if not device:
+            log.warning("Received data for unknown device: %s", device_id)
+            return
+
+        # Parse the WebSocket message using the parser
+        updates = self.parser.parse_attribute_update(data)
+
+        # Apply updates to the device
+        if "door_state" in updates:
+            device.update_door_state(updates["door_state"])
+
+        if "light_state" in updates:
+            device.update_light_state(updates["light_state"])
+
+        if "battery_level" in updates:
+            device.update_battery_level(updates["battery_level"])
