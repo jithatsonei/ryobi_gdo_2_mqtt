@@ -1,8 +1,20 @@
 import asyncio
 from concurrent.futures import Future
+from dataclasses import dataclass
 
 from ha_mqtt_discoverable import DeviceInfo, Settings as MQTTSettings
-from ha_mqtt_discoverable.sensors import BinarySensor, BinarySensorInfo, Cover, CoverInfo, Switch, SwitchInfo
+from ha_mqtt_discoverable.sensors import (
+    BinarySensor,
+    BinarySensorInfo,
+    Cover,
+    CoverInfo,
+    Number,
+    NumberInfo,
+    Sensor,
+    SensorInfo,
+    Switch,
+    SwitchInfo,
+)
 from paho.mqtt.client import Client, MQTTMessage
 
 from ryobi_gdo_2_mqtt.constants import (
@@ -13,6 +25,215 @@ from ryobi_gdo_2_mqtt.constants import (
     LightStates,
 )
 from ryobi_gdo_2_mqtt.logging import log
+
+
+@dataclass
+class ModuleConfig:
+    """Configuration for a device module."""
+
+    name: str
+    module_type: int
+    attribute_name: str
+
+
+# Module configurations
+MODULES = {
+    "garageDoor": ModuleConfig(
+        name="garageDoor",
+        module_type=5,
+        attribute_name="doorCommand",
+    ),
+    "garageLight": ModuleConfig(
+        name="garageLight",
+        module_type=5,
+        attribute_name="lightState",
+    ),
+    "backupCharger": ModuleConfig(
+        name="backupCharger",
+        module_type=6,
+        attribute_name="chargeLevel",
+    ),
+    "wifiModule": ModuleConfig(
+        name="wifiModule",
+        module_type=7,
+        attribute_name="rssi",
+    ),
+    "parkAssistLaser": ModuleConfig(
+        name="parkAssistLaser",
+        module_type=1,
+        attribute_name="moduleState",
+    ),
+    "inflator": ModuleConfig(
+        name="inflator",
+        module_type=4,
+        attribute_name="moduleState",
+    ),
+    "btSpeaker": ModuleConfig(
+        name="btSpeaker",
+        module_type=2,
+        attribute_name="moduleState",
+    ),
+    "fan": ModuleConfig(
+        name="fan",
+        module_type=3,
+        attribute_name="speed",
+    ),
+}
+
+
+class EntityFactory:
+    """Factory for creating MQTT entities."""
+
+    @staticmethod
+    def create_cover(
+        device_id: str, device_name: str, device_info: DeviceInfo, mqtt_settings: MQTTSettings.MQTT, callback
+    ) -> Cover:
+        """Create a cover entity for garage door."""
+        info = CoverInfo(
+            name=f"{device_name} Door",
+            unique_id=f"{device_id}_door",
+            device=device_info,
+        )
+        settings = MQTTSettings(mqtt=mqtt_settings, entity=info)
+        return Cover(settings, callback)
+
+    @staticmethod
+    def create_switch(
+        device_id: str,
+        device_name: str,
+        device_info: DeviceInfo,
+        mqtt_settings: MQTTSettings.MQTT,
+        callback,
+        entity_type: str,
+    ) -> Switch:
+        """Create a switch entity."""
+        names = {
+            "light": "Light",
+            "vacation": "Vacation Mode",
+            "park_assist": "Park Assist",
+            "inflator": "Inflator",
+            "bt_speaker": "Bluetooth Speaker",
+        }
+        info = SwitchInfo(
+            name=f"{device_name} {names[entity_type]}",
+            unique_id=f"{device_id}_{entity_type}",
+            device=device_info,
+        )
+        settings = MQTTSettings(mqtt=mqtt_settings, entity=info)
+        return Switch(settings, callback)
+
+    @staticmethod
+    def create_binary_sensor(
+        device_id: str, device_name: str, device_info: DeviceInfo, mqtt_settings: MQTTSettings.MQTT, sensor_type: str
+    ) -> BinarySensor:
+        """Create a binary sensor entity."""
+        names = {
+            "battery": "Battery",
+            "motion": "Motion",
+        }
+        device_classes = {
+            "battery": "battery",
+            "motion": "motion",
+        }
+        info = BinarySensorInfo(
+            name=f"{device_name} {names[sensor_type]}",
+            unique_id=f"{device_id}_{sensor_type}",
+            device_class=device_classes[sensor_type],
+            device=device_info,
+        )
+        settings = MQTTSettings(mqtt=mqtt_settings, entity=info)
+        return BinarySensor(settings)
+
+    @staticmethod
+    def create_sensor(
+        device_id: str,
+        device_name: str,
+        device_info: DeviceInfo,
+        mqtt_settings: MQTTSettings.MQTT,
+        sensor_type: str,
+        device_class: str | None = None,
+        unit: str | None = None,
+    ) -> Sensor:
+        """Create a sensor entity."""
+        names = {
+            "wifi": "WiFi Signal",
+        }
+        info = SensorInfo(
+            name=f"{device_name} {names[sensor_type]}",
+            unique_id=f"{device_id}_{sensor_type}",
+            device_class=device_class,
+            unit_of_measurement=unit,
+            device=device_info,
+        )
+        settings = MQTTSettings(mqtt=mqtt_settings, entity=info)
+        return Sensor(settings)
+
+    @staticmethod
+    def create_number(
+        device_id: str,
+        device_name: str,
+        device_info: DeviceInfo,
+        mqtt_settings: MQTTSettings.MQTT,
+        callback,
+        entity_type: str,
+        min_value: int = 0,
+        max_value: int = 100,
+        step: int = 1,
+    ) -> Number:
+        """Create a number entity."""
+        names = {
+            "fan": "Fan Speed",
+        }
+        info = NumberInfo(
+            name=f"{device_name} {names[entity_type]}",
+            unique_id=f"{device_id}_{entity_type}",
+            min=min_value,
+            max=max_value,
+            step=step,
+            device=device_info,
+        )
+        settings = MQTTSettings(mqtt=mqtt_settings, entity=info)
+        return Number(settings, callback)
+
+
+class CommandHandler:
+    """Base class for handling device commands."""
+
+    def __init__(self, device):
+        """Initialize command handler.
+
+        Args:
+            device: RyobiDevice instance
+        """
+        self.device = device
+
+    def send_command(self, module_name: str, value: int, attribute: str | None = None):
+        """Send a command to the device.
+
+        Args:
+            module_name: Name of the module (e.g., "garageDoor", "garageLight")
+            value: Value to set
+            attribute: Attribute to set (optional, uses module config default if not provided)
+        """
+        if module_name not in MODULES:
+            log.error("Unknown module: %s", module_name)
+            return
+
+        module_config = MODULES[module_name]
+        port_id = self.device.api_client.get_module(self.device.device_id, module_name)
+
+        if port_id is None:
+            log.error("Cannot send %s command: module info not available", module_name)
+            return
+
+        # Use provided attribute or default from config
+        attr = attribute if attribute is not None else module_config.attribute_name
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.device.websocket.send_message(port_id, module_config.module_type, attr, value), self.device.loop
+        )
+        self.device._pending_futures.add(future)
+        future.add_done_callback(self.device._pending_futures.discard)
 
 
 class RyobiDevice:
@@ -53,71 +274,59 @@ class RyobiDevice:
             model="Garage Door Opener",
         )
 
-        # Create cover entity for garage door
-        cover_info = CoverInfo(
-            name=f"{device_name} Door",
-            unique_id=f"{device_id}_door",
-            device=self.device_info,
-        )
-        cover_settings = MQTTSettings(mqtt=mqtt_settings, entity=cover_info)
-        self.cover = Cover(cover_settings, self._handle_door_command)
+        # Create command handler
+        self.command_handler = CommandHandler(self)
 
-        # Create switch entity for light
-        light_info = SwitchInfo(
-            name=f"{device_name} Light",
-            unique_id=f"{device_id}_light",
-            device=self.device_info,
+        # Create entities using factory
+        self.cover = EntityFactory.create_cover(
+            device_id, device_name, self.device_info, mqtt_settings, self._handle_door_command
         )
-        light_settings = MQTTSettings(mqtt=mqtt_settings, entity=light_info)
-        self.light = Switch(light_settings, self._handle_light_command)
-
-        # Create binary sensor for battery (if applicable)
-        battery_info = BinarySensorInfo(
-            name=f"{device_name} Battery",
-            unique_id=f"{device_id}_battery",
-            device_class="battery",
-            device=self.device_info,
+        self.light = EntityFactory.create_switch(
+            device_id, device_name, self.device_info, mqtt_settings, self._handle_light_command, "light"
         )
-        battery_settings = MQTTSettings(mqtt=mqtt_settings, entity=battery_info)
-        self.battery_sensor = BinarySensor(battery_settings)
+        self.battery_sensor = EntityFactory.create_binary_sensor(
+            device_id, device_name, self.device_info, mqtt_settings, "battery"
+        )
+        self.motion_sensor = EntityFactory.create_binary_sensor(
+            device_id, device_name, self.device_info, mqtt_settings, "motion"
+        )
+        self.wifi_sensor = EntityFactory.create_sensor(
+            device_id, device_name, self.device_info, mqtt_settings, "wifi", "signal_strength", "dBm"
+        )
+        self.vacation_switch = EntityFactory.create_switch(
+            device_id, device_name, self.device_info, mqtt_settings, self._handle_vacation_command, "vacation"
+        )
+        self.park_assist_switch = EntityFactory.create_switch(
+            device_id, device_name, self.device_info, mqtt_settings, self._handle_park_assist_command, "park_assist"
+        )
+        self.inflator_switch = EntityFactory.create_switch(
+            device_id, device_name, self.device_info, mqtt_settings, self._handle_inflator_command, "inflator"
+        )
+        self.bt_speaker_switch = EntityFactory.create_switch(
+            device_id, device_name, self.device_info, mqtt_settings, self._handle_bt_speaker_command, "bt_speaker"
+        )
+        self.fan_number = EntityFactory.create_number(
+            device_id, device_name, self.device_info, mqtt_settings, self._handle_fan_command, "fan"
+        )
 
         # Initialize states
         self.cover.closed()  # Makes it discoverable
         self.light.off()
+        self.vacation_switch.off()
 
     def _handle_door_command(self, client: Client, user_data, message: MQTTMessage):
         """Handle door commands from Home Assistant."""
         payload = message.payload.decode()
         log.info("Received door command for %s: %s", self.device_id, payload)
 
-        # Get module information dynamically
-        port_id = self.api_client.get_module(self.device_id, "garageDoor")
-        module_type = self.api_client.get_module_type("garageDoor")
-
-        if port_id is None or module_type is None:
-            log.error("Cannot send door command: module info not available")
-            return
-
         if payload == DoorCommandPayloads.OPEN:
             self.cover.opening()
-            future = asyncio.run_coroutine_threadsafe(
-                self.websocket.send_message(port_id, module_type, "doorCommand", DoorCommands.OPEN), self.loop
-            )
-            self._pending_futures.add(future)
-            future.add_done_callback(self._pending_futures.discard)
+            self.command_handler.send_command("garageDoor", DoorCommands.OPEN)
         elif payload == DoorCommandPayloads.CLOSE:
             self.cover.closing()
-            future = asyncio.run_coroutine_threadsafe(
-                self.websocket.send_message(port_id, module_type, "doorCommand", DoorCommands.CLOSE), self.loop
-            )
-            self._pending_futures.add(future)
-            future.add_done_callback(self._pending_futures.discard)
+            self.command_handler.send_command("garageDoor", DoorCommands.CLOSE)
         elif payload == DoorCommandPayloads.STOP:
-            future = asyncio.run_coroutine_threadsafe(
-                self.websocket.send_message(port_id, module_type, "doorCommand", DoorCommands.STOP), self.loop
-            )
-            self._pending_futures.add(future)
-            future.add_done_callback(self._pending_futures.discard)
+            self.command_handler.send_command("garageDoor", DoorCommands.STOP)
             self.cover.stopped()
 
     def _handle_light_command(self, client: Client, user_data, message: MQTTMessage):
@@ -125,28 +334,72 @@ class RyobiDevice:
         payload = message.payload.decode()
         log.info("Received light command for %s: %s", self.device_id, payload)
 
-        # Get module information dynamically
-        port_id = self.api_client.get_module(self.device_id, "garageLight")
-        module_type = self.api_client.get_module_type("garageLight")
-
-        if port_id is None or module_type is None:
-            log.error("Cannot send light command: module info not available")
-            return
-
         if payload == LightCommandPayloads.ON:
-            future = asyncio.run_coroutine_threadsafe(
-                self.websocket.send_message(port_id, module_type, "lightState", LightStates.ON), self.loop
-            )
-            self._pending_futures.add(future)
-            future.add_done_callback(self._pending_futures.discard)
+            self.command_handler.send_command("garageLight", LightStates.ON)
             self.light.on()
         elif payload == LightCommandPayloads.OFF:
-            future = asyncio.run_coroutine_threadsafe(
-                self.websocket.send_message(port_id, module_type, "lightState", LightStates.OFF), self.loop
-            )
-            self._pending_futures.add(future)
-            future.add_done_callback(self._pending_futures.discard)
+            self.command_handler.send_command("garageLight", LightStates.OFF)
             self.light.off()
+
+    def _handle_vacation_command(self, client: Client, user_data, message: MQTTMessage):
+        """Handle vacation mode commands from Home Assistant."""
+        payload = message.payload.decode()
+        log.info("Received vacation mode command for %s: %s", self.device_id, payload)
+
+        value = 1 if payload == "ON" else 0
+        self.command_handler.send_command("garageDoor", value, "vacationMode")
+
+        if value:
+            self.vacation_switch.on()
+        else:
+            self.vacation_switch.off()
+
+    def _handle_park_assist_command(self, client: Client, user_data, message: MQTTMessage):
+        """Handle park assist commands from Home Assistant."""
+        payload = message.payload.decode()
+        log.info("Received park assist command for %s: %s", self.device_id, payload)
+
+        value = 1 if payload == "ON" else 0
+        self.command_handler.send_command("parkAssistLaser", value)
+
+        if value:
+            self.park_assist_switch.on()
+        else:
+            self.park_assist_switch.off()
+
+    def _handle_inflator_command(self, client: Client, user_data, message: MQTTMessage):
+        """Handle inflator commands from Home Assistant."""
+        payload = message.payload.decode()
+        log.info("Received inflator command for %s: %s", self.device_id, payload)
+
+        value = 1 if payload == "ON" else 0
+        self.command_handler.send_command("inflator", value)
+
+        if value:
+            self.inflator_switch.on()
+        else:
+            self.inflator_switch.off()
+
+    def _handle_bt_speaker_command(self, client: Client, user_data, message: MQTTMessage):
+        """Handle bluetooth speaker commands from Home Assistant."""
+        payload = message.payload.decode()
+        log.info("Received bluetooth speaker command for %s: %s", self.device_id, payload)
+
+        value = 1 if payload == "ON" else 0
+        self.command_handler.send_command("btSpeaker", value)
+
+        if value:
+            self.bt_speaker_switch.on()
+        else:
+            self.bt_speaker_switch.off()
+
+    def _handle_fan_command(self, client: Client, user_data, message: MQTTMessage):
+        """Handle fan speed commands from Home Assistant."""
+        speed = int(message.payload.decode())
+        log.info("Received fan speed command for %s: %s", self.device_id, speed)
+
+        self.command_handler.send_command("fan", speed)
+        self.fan_number.set_value(speed)
 
     def update_door_state(self, state: str):
         """Update door state from WebSocket data.
@@ -192,6 +445,89 @@ class RyobiDevice:
             self.battery_sensor.on()  # Battery low
         else:
             self.battery_sensor.off()  # Battery OK
+
+    def update_motion_state(self, state: int):
+        """Update motion sensor state from WebSocket data.
+
+        Args:
+            state: Motion state (1=motion detected, 0=no motion)
+        """
+        log.debug("Updating motion state for %s: %s", self.device_id, state)
+
+        if state:
+            self.motion_sensor.on()
+        else:
+            self.motion_sensor.off()
+
+    def update_wifi_rssi(self, rssi: int):
+        """Update WiFi signal strength from WebSocket data.
+
+        Args:
+            rssi: WiFi signal strength in dBm
+        """
+        log.debug("Updating WiFi RSSI for %s: %s", self.device_id, rssi)
+        self.wifi_sensor.set_state(rssi)
+
+    def update_vacation_mode(self, state: int):
+        """Update vacation mode state from WebSocket data.
+
+        Args:
+            state: Vacation mode state (1=enabled, 0=disabled)
+        """
+        log.debug("Updating vacation mode for %s: %s", self.device_id, state)
+
+        if state:
+            self.vacation_switch.on()
+        else:
+            self.vacation_switch.off()
+
+    def update_park_assist(self, state: int):
+        """Update park assist state from WebSocket data.
+
+        Args:
+            state: Park assist state (1=enabled, 0=disabled)
+        """
+        log.debug("Updating park assist for %s: %s", self.device_id, state)
+
+        if state:
+            self.park_assist_switch.on()
+        else:
+            self.park_assist_switch.off()
+
+    def update_inflator(self, state: int):
+        """Update inflator state from WebSocket data.
+
+        Args:
+            state: Inflator state (1=enabled, 0=disabled)
+        """
+        log.debug("Updating inflator for %s: %s", self.device_id, state)
+
+        if state:
+            self.inflator_switch.on()
+        else:
+            self.inflator_switch.off()
+
+    def update_bt_speaker(self, state: int):
+        """Update bluetooth speaker state from WebSocket data.
+
+        Args:
+            state: Bluetooth speaker state (1=enabled, 0=disabled)
+        """
+        log.debug("Updating bluetooth speaker for %s: %s", self.device_id, state)
+
+        if state:
+            self.bt_speaker_switch.on()
+        else:
+            self.bt_speaker_switch.off()
+
+    def update_fan_speed(self, speed: int):
+        """Update fan speed from WebSocket data.
+
+        Args:
+            speed: Fan speed (0-100)
+        """
+        log.debug("Updating fan speed for %s: %s", self.device_id, speed)
+        self.fan_number.set_value(speed)
 
     async def cleanup(self):
         """Clean up device resources."""
@@ -266,6 +602,20 @@ class DeviceManager:
             device.update_light_state(bool(device_data.light_state))
         if device_data.battery_level is not None:
             device.update_battery_level(device_data.battery_level)
+        if device_data.motion is not None:
+            device.update_motion_state(device_data.motion)
+        if device_data.wifi_rssi is not None:
+            device.update_wifi_rssi(device_data.wifi_rssi)
+        if device_data.vacation_mode is not None:
+            device.update_vacation_mode(device_data.vacation_mode)
+        if device_data.park_assist is not None:
+            device.update_park_assist(device_data.park_assist)
+        if device_data.inflator is not None:
+            device.update_inflator(device_data.inflator)
+        if device_data.bt_speaker is not None:
+            device.update_bt_speaker(device_data.bt_speaker)
+        if device_data.fan is not None:
+            device.update_fan_speed(device_data.fan)
 
         return device
 
@@ -293,3 +643,24 @@ class DeviceManager:
 
         if "battery_level" in updates:
             device.update_battery_level(updates["battery_level"])
+
+        if "motion" in updates:
+            device.update_motion_state(updates["motion"])
+
+        if "wifi_rssi" in updates:
+            device.update_wifi_rssi(updates["wifi_rssi"])
+
+        if "vacation_mode" in updates:
+            device.update_vacation_mode(updates["vacation_mode"])
+
+        if "park_assist" in updates:
+            device.update_park_assist(updates["park_assist"])
+
+        if "inflator" in updates:
+            device.update_inflator(updates["inflator"])
+
+        if "bt_speaker" in updates:
+            device.update_bt_speaker(updates["bt_speaker"])
+
+        if "fan" in updates:
+            device.update_fan_speed(updates["fan"])

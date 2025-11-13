@@ -227,6 +227,110 @@ class TestCommandFlow:
         assert call_args[3] == 1  # ON state
 
 
+class TestNewEntitiesIntegration:
+    """Integration tests for newly added entities."""
+
+    @pytest.mark.asyncio
+    @patch("ryobi_gdo_2_mqtt.device_manager.Cover")
+    @patch("ryobi_gdo_2_mqtt.device_manager.Switch")
+    @patch("ryobi_gdo_2_mqtt.device_manager.BinarySensor")
+    @patch("ryobi_gdo_2_mqtt.device_manager.Sensor")
+    @patch("ryobi_gdo_2_mqtt.device_manager.Number")
+    async def test_all_entities_created_on_device_setup(
+        self, mock_number, mock_sensor, mock_binary_sensor, mock_switch, mock_cover, mock_mqtt_settings, fixtures_dir
+    ):
+        """Test that all entities are created when device is set up."""
+        mock_api_client = MagicMock()
+
+        async def mock_update_device(device_id):
+            from ryobi_gdo_2_mqtt.models import DeviceData
+
+            return DeviceData(
+                door_state="closed",
+                light_state=False,
+                battery_level=100,
+                motion=0,
+                wifi_rssi=-50,
+                vacation_mode=0,
+                park_assist=0,
+                inflator=0,
+                bt_speaker=0,
+                fan=0,
+                device_name="Test Device",
+            )
+
+        mock_api_client.update_device = AsyncMock(side_effect=mock_update_device)
+        mock_api_client.get_module = MagicMock(return_value=7)
+        mock_api_client._device_modules = {"test_device": {"garageDoor": "garageDoor_7"}}
+
+        mock_websocket = MagicMock()
+        mock_websocket.send_message = AsyncMock()
+
+        from ryobi_gdo_2_mqtt.device_manager import DeviceManager
+
+        device_manager = DeviceManager(mqtt_settings=mock_mqtt_settings, api_client=mock_api_client)
+
+        device = await device_manager.setup_device("test_device", "Test Device", mock_websocket)
+
+        # Verify all entities were created
+        assert hasattr(device, "cover")
+        assert hasattr(device, "light")
+        assert hasattr(device, "battery_sensor")
+        assert hasattr(device, "motion_sensor")
+        assert hasattr(device, "wifi_sensor")
+        assert hasattr(device, "vacation_switch")
+        assert hasattr(device, "park_assist_switch")
+        assert hasattr(device, "inflator_switch")
+        assert hasattr(device, "bt_speaker_switch")
+        assert hasattr(device, "fan_number")
+
+    @pytest.mark.asyncio
+    async def test_vacation_mode_command_flow(self, mock_mqtt_settings, fixtures_dir):
+        """Test vacation mode command flow."""
+        from paho.mqtt.client import MQTTMessage
+
+        mock_api_client = MagicMock()
+        mock_api_client.get_module = MagicMock(return_value=7)
+
+        mock_websocket = MagicMock()
+        mock_websocket.send_message = AsyncMock()
+
+        loop = asyncio.get_running_loop()
+
+        with (
+            patch("ryobi_gdo_2_mqtt.device_manager.Cover"),
+            patch("ryobi_gdo_2_mqtt.device_manager.Switch"),
+            patch("ryobi_gdo_2_mqtt.device_manager.BinarySensor"),
+            patch("ryobi_gdo_2_mqtt.device_manager.Sensor"),
+            patch("ryobi_gdo_2_mqtt.device_manager.Number"),
+        ):
+            from ryobi_gdo_2_mqtt.device_manager import RyobiDevice
+
+            device = RyobiDevice(
+                device_id="test_device",
+                device_name="Test Device",
+                mqtt_settings=mock_mqtt_settings,
+                websocket=mock_websocket,
+                api_client=mock_api_client,
+                loop=loop,
+            )
+
+            # Simulate MQTT vacation mode command
+            mqtt_message = MQTTMessage()
+            mqtt_message.payload = b"ON"
+
+            device._handle_vacation_command(None, None, mqtt_message)
+
+            # Wait for async task to complete
+            await asyncio.sleep(0.1)
+
+            # Verify WebSocket message was sent
+            mock_websocket.send_message.assert_called_once()
+            call_args = mock_websocket.send_message.call_args[0]
+            assert call_args[2] == "vacationMode"
+            assert call_args[3] == 1
+
+
 class TestEndToEndFlow:
     """End-to-end integration tests."""
 
@@ -234,8 +338,10 @@ class TestEndToEndFlow:
     @patch("ryobi_gdo_2_mqtt.device_manager.Cover")
     @patch("ryobi_gdo_2_mqtt.device_manager.Switch")
     @patch("ryobi_gdo_2_mqtt.device_manager.BinarySensor")
+    @patch("ryobi_gdo_2_mqtt.device_manager.Sensor")
+    @patch("ryobi_gdo_2_mqtt.device_manager.Number")
     async def test_complete_flow_with_multiple_devices(
-        self, mock_binary_sensor, mock_switch, mock_cover, mock_mqtt_settings, fixtures_dir
+        self, mock_number, mock_sensor, mock_binary_sensor, mock_switch, mock_cover, mock_mqtt_settings, fixtures_dir
     ):
         """Test complete flow with multiple devices: auth → discovery → setup → updates."""
         # Mock session

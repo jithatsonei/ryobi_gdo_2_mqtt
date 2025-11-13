@@ -144,3 +144,19 @@ class TestRyobiApiClient:
     def test_get_module_type_returns_none_for_unknown(self, api_client):
         """Test getting unknown module type returns None."""
         assert api_client.get_module_type("unknownModule") is None
+
+
+class TestApiClientModuleConfig:
+    """Tests for API client module configuration integration."""
+
+    def test_get_module_type_uses_modules_config(self, api_client):
+        """Test that get_module_type uses MODULES configuration."""
+        from ryobi_gdo_2_mqtt.device_manager import MODULES
+
+        for module_name, config in MODULES.items():
+            module_type = api_client.get_module_type(module_name)
+            assert module_type == config.module_type
+
+    def test_get_module_type_returns_none_for_unknown_module(self, api_client):
+        """Test that get_module_type returns None for unknown modules."""
+        assert api_client.get_module_type("unknownModule") is None

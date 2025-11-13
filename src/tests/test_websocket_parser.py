@@ -77,3 +77,77 @@ class TestWebSocketMessageParser:
         # This message has both doorState and doorPosition
         assert "door_state" in updates
         assert updates["door_state"] == "open"
+
+
+class TestWebSocketParserNewEntities:
+    """Tests for WebSocket parser with newly added entities."""
+
+    def test_parse_vacation_mode_update(self, parser):
+        """Test parsing vacation mode update."""
+        data = {
+            "method": "wskAttributeUpdateNtfy",
+            "params": {
+                "garageDoor_7.vacationMode": {"value": 1},
+            },
+        }
+
+        updates = parser.parse_attribute_update(data)
+
+        assert "vacation_mode" in updates
+        assert updates["vacation_mode"] == 1
+
+    def test_parse_park_assist_update(self, parser):
+        """Test parsing park assist update."""
+        data = {
+            "method": "wskAttributeUpdateNtfy",
+            "params": {
+                "parkAssistLaser_1.moduleState": {"value": 1},
+            },
+        }
+
+        updates = parser.parse_attribute_update(data)
+
+        assert "park_assist" in updates
+        assert updates["park_assist"] == 1
+
+    def test_parse_fan_speed_update(self, parser):
+        """Test parsing fan speed update."""
+        data = {
+            "method": "wskAttributeUpdateNtfy",
+            "params": {
+                "fan_3.speed": {"value": 75},
+            },
+        }
+
+        updates = parser.parse_attribute_update(data)
+
+        assert "fan" in updates
+        assert updates["fan"] == 75
+
+    def test_parse_inflator_update(self, parser):
+        """Test parsing inflator update."""
+        data = {
+            "method": "wskAttributeUpdateNtfy",
+            "params": {
+                "inflator_4.moduleState": {"value": 1},
+            },
+        }
+
+        updates = parser.parse_attribute_update(data)
+
+        assert "inflator" in updates
+        assert updates["inflator"] == 1
+
+    def test_parse_bt_speaker_update(self, parser):
+        """Test parsing bluetooth speaker update."""
+        data = {
+            "method": "wskAttributeUpdateNtfy",
+            "params": {
+                "btSpeaker_2.moduleState": {"value": 1},
+            },
+        }
+
+        updates = parser.parse_attribute_update(data)
+
+        assert "bt_speaker" in updates
+        assert updates["bt_speaker"] == 1

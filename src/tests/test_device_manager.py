@@ -172,6 +172,239 @@ class TestRyobiDevice:
         loop.close()
 
 
+class TestModuleConfig:
+    """Tests for ModuleConfig and MODULES configuration."""
+
+    def test_module_config_dataclass(self):
+        """Test ModuleConfig dataclass creation."""
+        from ryobi_gdo_2_mqtt.device_manager import ModuleConfig
+
+        config = ModuleConfig(
+            name="testModule",
+            module_type=5,
+            attribute_name="testAttribute",
+        )
+
+        assert config.name == "testModule"
+        assert config.module_type == 5
+        assert config.attribute_name == "testAttribute"
+
+    def test_all_modules_defined(self):
+        """Test that all expected modules are defined in MODULES."""
+        from ryobi_gdo_2_mqtt.device_manager import MODULES
+
+        expected_modules = [
+            "garageDoor",
+            "garageLight",
+            "backupCharger",
+            "wifiModule",
+            "parkAssistLaser",
+            "inflator",
+            "btSpeaker",
+            "fan",
+        ]
+
+        for module in expected_modules:
+            assert module in MODULES, f"Module {module} not found in MODULES"
+
+    def test_module_config_has_required_fields(self):
+        """Test that all module configs have required fields."""
+        from ryobi_gdo_2_mqtt.device_manager import MODULES
+
+        for module_name, config in MODULES.items():
+            assert config.name == module_name
+            assert isinstance(config.module_type, int)
+            assert isinstance(config.attribute_name, str)
+            assert config.module_type > 0
+
+    def test_module_types_are_unique_per_module(self):
+        """Test that module types are consistent."""
+        from ryobi_gdo_2_mqtt.device_manager import MODULES
+
+        # Some modules can share types (e.g., garageDoor and garageLight both use type 5)
+        # but each module should have a consistent type
+        assert MODULES["garageDoor"].module_type == 5
+        assert MODULES["garageLight"].module_type == 5
+        assert MODULES["backupCharger"].module_type == 6
+        assert MODULES["wifiModule"].module_type == 7
+        assert MODULES["parkAssistLaser"].module_type == 1
+        assert MODULES["inflator"].module_type == 4
+        assert MODULES["btSpeaker"].module_type == 2
+        assert MODULES["fan"].module_type == 3
+
+
+class TestCommandHandler:
+    """Tests for CommandHandler."""
+
+    @pytest.fixture
+    def mock_device(self, mock_mqtt_settings, mock_websocket, mock_api_client):
+        """Create a mock device for testing."""
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+
+        with (
+            patch("ryobi_gdo_2_mqtt.device_manager.Cover"),
+            patch("ryobi_gdo_2_mqtt.device_manager.Switch"),
+            patch("ryobi_gdo_2_mqtt.device_manager.BinarySensor"),
+            patch("ryobi_gdo_2_mqtt.device_manager.Sensor"),
+            patch("ryobi_gdo_2_mqtt.device_manager.Number"),
+        ):
+            from ryobi_gdo_2_mqtt.device_manager import RyobiDevice
+
+            device = RyobiDevice(
+                device_id="test_device",
+                device_name="Test Device",
+                mqtt_settings=mock_mqtt_settings,
+                websocket=mock_websocket,
+                api_client=mock_api_client,
+                loop=loop,
+            )
+
+        yield device
+        loop.close()
+
+    def test_command_handler_initialization(self, mock_device):
+        """Test CommandHandler initialization."""
+        from ryobi_gdo_2_mqtt.device_manager import CommandHandler
+
+        handler = CommandHandler(mock_device)
+
+        assert handler.device is mock_device
+
+    def test_send_command_with_default_attribute(self, mock_device):
+        """Test sending command with default attribute from module config."""
+        mock_device.api_client.get_module.return_value = 7
+        mock_device.websocket.send_message = AsyncMock()
+
+        mock_device.command_handler.send_command("garageDoor", 1)
+
+        # Should use default attribute "doorCommand" from MODULES config
+        mock_device.websocket.send_message.assert_called_once()
+
+    def test_send_command_with_custom_attribute(self, mock_device):
+        """Test sending command with custom attribute override."""
+        mock_device.api_client.get_module.return_value = 7
+        mock_device.websocket.send_message = AsyncMock()
+
+        mock_device.command_handler.send_command("garageDoor", 1, "customAttribute")
+
+        # Should use custom attribute instead of default
+        mock_device.websocket.send_message.assert_called_once()
+
+    def test_send_command_unknown_module(self, mock_device):
+        """Test sending command to unknown module logs error."""
+        with patch("ryobi_gdo_2_mqtt.device_manager.log") as mock_log:
+            mock_device.command_handler.send_command("unknownModule", 1)
+
+            mock_log.error.assert_called_once()
+            assert "Unknown module" in str(mock_log.error.call_args)
+
+    def test_send_command_module_not_available(self, mock_device):
+        """Test sending command when module info not available."""
+        mock_device.api_client.get_module.return_value = None
+
+        with patch("ryobi_gdo_2_mqtt.device_manager.log") as mock_log:
+            mock_device.command_handler.send_command("garageDoor", 1)
+
+            mock_log.error.assert_called_once()
+            assert "module info not available" in str(mock_log.error.call_args)
+
+
+class TestEntityFactory:
+    """Tests for EntityFactory."""
+
+    @pytest.fixture
+    def device_info(self):
+        """Create device info for testing."""
+        from ha_mqtt_discoverable import DeviceInfo
+
+        return DeviceInfo(
+            name="Test Device",
+            identifiers="test_device",
+            manufacturer="Ryobi",
+            model="Garage Door Opener",
+        )
+
+    def test_create_cover(self, mock_mqtt_settings, device_info):
+        """Test creating a cover entity."""
+        from ryobi_gdo_2_mqtt.device_manager import EntityFactory
+
+        callback = MagicMock()
+
+        with patch("ryobi_gdo_2_mqtt.device_manager.Cover") as mock_cover:
+            cover = EntityFactory.create_cover("test_device", "Test Device", device_info, mock_mqtt_settings, callback)
+
+            mock_cover.assert_called_once()
+            assert cover is not None
+
+    def test_create_switch(self, mock_mqtt_settings, device_info):
+        """Test creating a switch entity."""
+        from ryobi_gdo_2_mqtt.device_manager import EntityFactory
+
+        callback = MagicMock()
+
+        with patch("ryobi_gdo_2_mqtt.device_manager.Switch") as mock_switch:
+            switch = EntityFactory.create_switch(
+                "test_device", "Test Device", device_info, mock_mqtt_settings, callback, "light"
+            )
+
+            mock_switch.assert_called_once()
+            assert switch is not None
+
+    def test_create_binary_sensor(self, mock_mqtt_settings, device_info):
+        """Test creating a binary sensor entity."""
+        from ryobi_gdo_2_mqtt.device_manager import EntityFactory
+
+        with patch("ryobi_gdo_2_mqtt.device_manager.BinarySensor") as mock_sensor:
+            sensor = EntityFactory.create_binary_sensor(
+                "test_device", "Test Device", device_info, mock_mqtt_settings, "battery"
+            )
+
+            mock_sensor.assert_called_once()
+            assert sensor is not None
+
+    def test_create_sensor(self, mock_mqtt_settings, device_info):
+        """Test creating a sensor entity."""
+        from ryobi_gdo_2_mqtt.device_manager import EntityFactory
+
+        with patch("ryobi_gdo_2_mqtt.device_manager.Sensor") as mock_sensor:
+            sensor = EntityFactory.create_sensor(
+                "test_device", "Test Device", device_info, mock_mqtt_settings, "wifi", "signal_strength", "dBm"
+            )
+
+            mock_sensor.assert_called_once()
+            assert sensor is not None
+
+    def test_create_number(self, mock_mqtt_settings, device_info):
+        """Test creating a number entity."""
+        from ryobi_gdo_2_mqtt.device_manager import EntityFactory
+
+        callback = MagicMock()
+
+        with patch("ryobi_gdo_2_mqtt.device_manager.Number") as mock_number:
+            number = EntityFactory.create_number(
+                "test_device", "Test Device", device_info, mock_mqtt_settings, callback, "fan"
+            )
+
+            mock_number.assert_called_once()
+            assert number is not None
+
+    def test_switch_entity_types(self, mock_mqtt_settings, device_info):
+        """Test all switch entity types can be created."""
+        from ryobi_gdo_2_mqtt.device_manager import EntityFactory
+
+        callback = MagicMock()
+        entity_types = ["light", "vacation", "park_assist", "inflator", "bt_speaker"]
+
+        with patch("ryobi_gdo_2_mqtt.device_manager.Switch"):
+            for entity_type in entity_types:
+                switch = EntityFactory.create_switch(
+                    "test_device", "Test Device", device_info, mock_mqtt_settings, callback, entity_type
+                )
+                assert switch is not None
+
+
 class TestDeviceManager:
     """Tests for DeviceManager."""
 

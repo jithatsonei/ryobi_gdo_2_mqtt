@@ -292,15 +292,13 @@ class RyobiApiClient:
 
         Returns:
             Module type ID or None if not found
+
+        Note:
+            This method is deprecated. Module types are now defined in MODULES configuration.
+            Kept for backward compatibility.
         """
-        module_type = {
-            "garageDoor": 5,
-            "backupCharger": 6,
-            "garageLight": 5,
-            "wifiModule": 7,
-            "parkAssistLaser": 1,
-            "inflator": 4,
-            "btSpeaker": 2,
-            "fan": 3,
-        }
-        return module_type.get(module)
+        from ryobi_gdo_2_mqtt.device_manager import MODULES
+
+        if module in MODULES:
+            return MODULES[module].module_type
+        return None
