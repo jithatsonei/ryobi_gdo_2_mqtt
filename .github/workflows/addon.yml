@@ -75,7 +75,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             BUILD_FROM=${{ matrix.build_from }}
-            UPSTREAM_IMAGE=UseTheFork/ryobi_gdo_2_mqtt:latest
+            UPSTREAM_IMAGE=usethefork/ryobi_gdo_2_mqtt:latest
           tags: |
             ${{ steps.meta.outputs.image }}:latest
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}

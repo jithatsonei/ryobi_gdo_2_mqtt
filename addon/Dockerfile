@@ -1,5 +1,5 @@
 ARG BUILD_FROM
-ARG UPSTREAM_IMAGE=UseTheFork/ryobi_gdo_2_mqtt:latest
+ARG UPSTREAM_IMAGE=usethefork/ryobi_gdo_2_mqtt:latest
 
 FROM ${UPSTREAM_IMAGE} as ryobi_gdo_2_mqtt
 
