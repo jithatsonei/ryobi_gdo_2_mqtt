@@ -6,8 +6,7 @@ on:
       - main
       - feat/haos_addon
     tags:
-      - "v*"
-      - "addon-*"
+      - '*'
   workflow_dispatch:
 
 permissions:
