@@ -1,5 +1,5 @@
 name: Ryobi GDO to MQTT Bridge
-version: "0.1.0"
+version: "0.2.0"
 slug: ryobi_gdo2mqtt
 description: Control Ryobi GDO Devices
 url: https://github.com/jithatsonei/ryobi_gdo_2_mqtt
