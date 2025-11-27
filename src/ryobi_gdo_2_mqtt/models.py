@@ -1,6 +1,6 @@
 """Data Transfer Objects for Ryobi GDO 2 MQTT integration."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
@@ -22,31 +22,31 @@ class WskAuthAttempt(BaseModel):
 class MetaData(BaseModel):
     """User metadata from login response."""
 
-    userName: str
-    authCount: int
-    wskAuthAttempts: list[WskAuthAttempt]
+    userName: str | None = None
+    authCount: int | None = None
+    wskAuthAttempts: list[WskAuthAttempt] = Field(default_factory=list)
 
 
 class Auth(BaseModel):
     """Authentication details."""
 
     apiKey: str
-    regPin: str
-    clientUserName: str
-    createdDate: str
-    childSelectors: list[str]
+    regPin: str | None = None
+    clientUserName: str | None = None
+    createdDate: str | None = None
+    childSelectors: list[str] = Field(default_factory=list)
 
 
 class LoginResult(BaseModel):
     """Login result data."""
 
-    _id: str
-    varName: str
-    metaData: MetaData
-    enabled: bool
-    deleted: bool
-    createdDate: str
-    activated: bool
+    _id: str | None = None
+    varName: str | None = None
+    metaData: MetaData = Field(default_factory=MetaData)
+    enabled: bool | None = None
+    deleted: bool | None = None
+    createdDate: str | None = None
+    activated: bool | None = None
     auth: Auth
 
 

@@ -1,0 +1,40 @@
+name: Ryobi GDO to MQTT Bridge
+version: "0.3.0"
+slug: ryobi_gdo2mqtt
+description: Control Ryobi GDO Devices
+url: https://github.com/jithatsonei/ryobi_gdo_2_mqtt
+image: ghcr.io/jithatsonei/ryobi_gdo_2_mqtt-{arch}
+arch:
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
+  - i386
+init: false
+startup: services
+boot: auto
+services:
+  - mqtt:need
+
+apparmor: true
+
+# Host network access is required for LAN discovery
+host_network: true
+
+options:
+  ryobi_email: ""
+  ryobi_password: ""
+  mqtt_host: ""
+  mqtt_port: 1883
+  mqtt_username: ""
+  mqtt_password: ""
+  log_level: INFO
+
+schema:
+  ryobi_email: str
+  ryobi_password: password
+  mqtt_host: str?
+  mqtt_port: int?
+  mqtt_username: str?
+  mqtt_password: password?
+  log_level: list(DEBUG|INFO|WARNING|ERROR|CRITICAL)?

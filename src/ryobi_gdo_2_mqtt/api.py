@@ -47,34 +47,60 @@ class RyobiApiClient:
         if request is None:
             raise RyobiAuthenticationError("Failed to get response from login endpoint")
         try:
-            # Parse response into DTO
-            wsk_attempts = [WskAuthAttempt(**attempt) for attempt in request["result"]["metaData"]["wskAuthAttempts"]]
+            result_block = request.get("result")
+            if not isinstance(result_block, dict):
+                raise RyobiInvalidResponseError("Invalid login response: missing result object")
+
+            auth_block = result_block.get("auth") or {}
+            api_key = auth_block.get("apiKey")
+            if not api_key:
+                raise RyobiInvalidResponseError("Invalid login response: apiKey missing")
+
+            meta_block = result_block.get("metaData") or {}
+            username_from_response = (
+                meta_block.get("userName")
+                or result_block.get("varName")
+                or self.username
+            )
+            wsk_attempts: list[WskAuthAttempt] = []
+            for attempt in meta_block.get("wskAuthAttempts") or []:
+                if not isinstance(attempt, dict):
+                    continue
+                try:
+                    wsk_attempts.append(WskAuthAttempt(**attempt))
+                except Exception as exc:
+                    log.debug("Skipping malformed auth attempt entry %s: %s", attempt, exc)
+
             metadata = MetaData(
-                userName=request["result"]["metaData"]["userName"],
-                authCount=request["result"]["metaData"]["authCount"],
+                userName=username_from_response,
+                authCount=meta_block.get("authCount"),
                 wskAuthAttempts=wsk_attempts,
             )
+
             auth = Auth(
-                apiKey=request["result"]["auth"]["apiKey"],
-                regPin=request["result"]["auth"]["regPin"],
-                clientUserName=request["result"]["auth"]["clientUserName"],
-                createdDate=request["result"]["auth"]["createdDate"],
-                childSelectors=request["result"]["auth"]["childSelectors"],
+                apiKey=api_key,
+                regPin=auth_block.get("regPin"),
+                clientUserName=auth_block.get("clientUserName"),
+                createdDate=auth_block.get("createdDate"),
+                childSelectors=auth_block.get("childSelectors") or [],
             )
-            result = LoginResult(
-                _id=request["result"]["_id"],
-                varName=request["result"]["varName"],
-                metaData=metadata,
-                enabled=request["result"]["enabled"],
-                deleted=request["result"]["deleted"],
-                createdDate=request["result"]["createdDate"],
-                activated=request["result"]["activated"],
-                auth=auth,
+            login_response = LoginResponse(
+                result=LoginResult(
+                    _id=result_block.get("_id"),
+                    varName=result_block.get("varName"),
+                    metaData=metadata,
+                    enabled=result_block.get("enabled"),
+                    deleted=result_block.get("deleted"),
+                    createdDate=result_block.get("createdDate"),
+                    activated=result_block.get("activated"),
+                    auth=auth,
+                )
             )
-            login_response = LoginResponse(result=result)
             self.api_key = login_response.api_key
             return True
-        except KeyError as e:
+        except RyobiInvalidResponseError:
+            raise
+        except Exception as e:
             log.error("Exception while parsing Ryobi answer to get API key: %s", e)
             raise RyobiInvalidResponseError(f"Invalid login response format: {e}") from e
 
